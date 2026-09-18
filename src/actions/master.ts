@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import * as master from "@/lib/master";
-import { requireRole, wrap } from "./session";
+import { requireRole, requireUser, wrap } from "./session";
 
 export async function createProductAction(input: Parameters<typeof master.createProduct>[0]) {
   await requireRole(["ADMIN", "MANAGER"]);
@@ -66,6 +66,28 @@ export async function createExpenseCategoryAction(input: Parameters<typeof maste
 export async function createUserAction(input: Parameters<typeof master.createUser>[0]) {
   await requireRole(["ADMIN"]);
   const result = await wrap(() => master.createUser(input));
+  if (result.ok) revalidatePath("/settings");
+  return result;
+}
+
+/** Any logged-in user can change their own name/email/password (not gated by role — it's their
+ * own account). Requires their current password. */
+export async function updateOwnProfileAction(input: Parameters<typeof master.updateOwnProfile>[1]) {
+  const user = await requireUser();
+  const result = await wrap(() => master.updateOwnProfile(user.id, input));
+  if (result.ok) revalidatePath("/settings");
+  return result;
+}
+
+/** Admin-only: enable/disable another user's login (e.g. disabling the default admin account
+ * after creating a personal one). An admin can't deactivate their own account this way — that
+ * would risk locking everyone out if they're the only admin. */
+export async function setUserActiveAction(userId: string, active: boolean) {
+  const admin = await requireRole(["ADMIN"]);
+  if (userId === admin.id) {
+    return { ok: false as const, error: "Anda tidak bisa menonaktifkan akun Anda sendiri." };
+  }
+  const result = await wrap(() => master.setUserActive(userId, active));
   if (result.ok) revalidatePath("/settings");
   return result;
 }

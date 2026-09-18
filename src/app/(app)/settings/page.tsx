@@ -9,7 +9,8 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
   await getDb();
   const session = await getServerSession(authOptions);
-  const role = (session?.user as any)?.role;
+  const currentUser = session?.user as any;
+  const role = currentUser?.role;
   const users = listUsers() as any[];
   const categories = listExpenseCategories() as any[];
   const settings = getSettings();
@@ -22,7 +23,12 @@ export default async function SettingsPage() {
         <div className="flex justify-between py-1"><span className="text-slate-500">Mulai Bisnis</span><span className="font-medium">{new Date(settings.start_date).toLocaleDateString("id-ID")}</span></div>
         <div className="flex justify-between py-1"><span className="text-slate-500">Currency</span><span className="font-medium">{settings.currency}</span></div>
       </div>
-      <SettingsClient users={users} categories={categories} isAdmin={role === "ADMIN"} />
+      <SettingsClient
+        users={users}
+        categories={categories}
+        isAdmin={role === "ADMIN"}
+        currentUser={{ id: currentUser?.id, name: currentUser?.name, email: currentUser?.email }}
+      />
     </div>
   );
 }

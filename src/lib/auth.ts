@@ -54,6 +54,10 @@ export function hashPassword(pw: string): string {
   return bcrypt.hashSync(pw, 10);
 }
 
+export function verifyPassword(plain: string, hash: string): boolean {
+  return bcrypt.compareSync(plain, hash);
+}
+
 export function canManageFinance(role: Role): boolean {
   return role === "ADMIN" || role === "MANAGER";
 }

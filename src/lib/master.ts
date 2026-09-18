@@ -2,7 +2,7 @@
 // their per-entity dashboards (Sections 13/14: customer & supplier summary panels).
 import { db } from "./db";
 import { newId, nowIso } from "./id";
-import { hashPassword } from "./auth";
+import { hashPassword, verifyPassword } from "./auth";
 
 // ---------------------------------------------------------------------------
 // PRODUCTS
@@ -288,6 +288,45 @@ export function createUser(input: { name: string; email: string; password: strin
     nowIso()
   );
   return { id };
+}
+
+/** Lets a logged-in user change their own name/email/password. Requires the correct current
+ * password (defense against a left-open session being used to hijack the account). Changing the
+ * email means the NEXT login must use the new address — the current session keeps working until
+ * it's next refreshed/re-logged-in, since sessions are JWT-based and don't re-read the DB. */
+export function updateOwnProfile(
+  userId: string,
+  input: { name: string; email: string; currentPassword: string; newPassword?: string }
+) {
+  const user = db.prepare(`SELECT password_hash FROM users WHERE id = ?`).get(userId) as
+    | { password_hash: string }
+    | undefined;
+  if (!user) throw new Error("User tidak ditemukan.");
+  if (!verifyPassword(input.currentPassword, user.password_hash)) {
+    throw new Error("Password saat ini salah.");
+  }
+
+  const newHash = input.newPassword ? hashPassword(input.newPassword) : user.password_hash;
+  try {
+    db.prepare(`UPDATE users SET name = ?, email = ?, password_hash = ? WHERE id = ?`).run(
+      input.name,
+      input.email,
+      newHash,
+      userId
+    );
+  } catch (err: any) {
+    if (String(err?.message ?? "").includes("UNIQUE")) {
+      throw new Error("Email tersebut sudah dipakai user lain.");
+    }
+    throw err;
+  }
+}
+
+/** Admin-only: activate/deactivate another user's account (e.g. disabling the default admin
+ * account after creating a personal one). Guarding against self-deactivation happens in the
+ * server action, not here, so this stays a plain data operation. */
+export function setUserActive(userId: string, active: boolean) {
+  db.prepare(`UPDATE users SET active = ? WHERE id = ?`).run(active ? 1 : 0, userId);
 }
 
 // ---------------------------------------------------------------------------

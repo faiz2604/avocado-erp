@@ -91,12 +91,34 @@ Blobs into `/tmp`, and after every write (every server action, plus `/api/setup`
 updated file back. Netlify Blobs is bundled with every Netlify site — **no separate database
 account or add-on is needed.**
 
-To deploy:
+**Do not use Netlify's "drag and drop a folder" manual deploy for this project.** That path
+publishes whatever files are in the folder exactly as-is — it never runs `npm install` or
+`npm run build`, so none of the serverless functions (API routes, server actions, the database
+layer) get built at all. That mismatch is consistent with the earlier errors. Use one of the two
+build-based methods below instead; both run the real build (`netlify.toml` in this project already
+points at `npm run build` and the official Next.js Runtime plugin, so neither needs extra
+configuration in the UI beyond the environment variables in step 2).
 
-1. Push this project to a Git repo (GitHub/GitLab/Bitbucket) and connect it to a new Netlify site,
-   or run `netlify deploy` from the project folder with the Netlify CLI. Netlify auto-detects
-   Next.js via the official Next.js Runtime — no extra build configuration is required.
-2. In the Netlify site's **Site configuration → Environment variables**, set:
+**Method A — connect a Git repo (recommended: auto-deploys on every future push):**
+
+1. Push this project to a new repo on GitHub, GitLab, or Bitbucket.
+2. In the Netlify dashboard: **Add new site → Import an existing project**, pick your Git provider,
+   and select the repo. Netlify reads `netlify.toml` automatically, so the build command and
+   Next.js plugin are already set — just click through to create the site.
+
+**Method B — deploy straight from this folder with the Netlify CLI (no Git needed):**
+
+1. `npm install -g netlify-cli` (once), then `netlify login`.
+2. From inside this project folder: `netlify init` (choose "Create & configure a new site", or
+   "Link this directory to an existing site" if you already created one in step above).
+3. `netlify deploy --build --prod` — this runs the real `npm run build` locally against Netlify's
+   build system and publishes the result, functions included.
+
+Either method actually builds the app, which manual drag-and-drop does not.
+
+**After the site exists (either method), before your first deploy finishes successfully:**
+
+1. In the Netlify site's **Site configuration → Environment variables**, set:
    - `NEXTAUTH_SECRET` — a random secret (generate one with `openssl rand -base64 32`). This is
      what was missing/misconfigured in the earlier deploy and caused the
      `/api/auth/error?error=Configuration` 500 error — NextAuth refuses to start without it in
@@ -105,7 +127,10 @@ To deploy:
      this if you later attach a custom domain).
    - `DATABASE_URL` is **not needed** on Netlify — it's ignored in favor of the `/tmp` + Blobs path
      automatically (see `src/lib/db.ts`).
-3. Deploy. The very first request creates a fresh database (same default admin login as local dev:
+2. Trigger a deploy if one hasn't already run (Method A: **Deploys → Trigger deploy**; Method B:
+   re-run `netlify deploy --build --prod`) so the build picks up the environment variables you just
+   set — a deploy that ran before you added them won't have them. The very first request after that
+   creates a fresh database (same default admin login as local dev:
    `admin@avocado.local` / `admin123` — **change this password immediately** after first login, or
    create a new admin user and deactivate the default one) and saves it to Blobs; every request
    after that reuses it.
