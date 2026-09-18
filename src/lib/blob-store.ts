@@ -21,7 +21,22 @@ import { initializeFreshDatabase } from "./schema-init";
 const STORE_NAME = "avocado-erp-db";
 const BLOB_KEY = "dev.db";
 
-export const IS_NETLIFY = !!process.env.NETLIFY;
+// `process.env.NETLIFY` is reliably set during the *build* step, but it turns out it is NOT always
+// present inside the actual deployed function's runtime environment (this was the wrong assumption
+// behind the original build-time fix, and it caused a follow-on bug: with IS_NETLIFY resolving to
+// `false` at request time, src/lib/db.ts fell back to its local-dev file path — a path inside the
+// function bundle's read-only /var/task directory on Netlify — and better-sqlite3 crashed with
+// `SQLITE_CANTOPEN` trying to create a database file there. Netlify's standard (non-Edge) Functions
+// run on AWS Lambda under the hood, and Lambda's own bootstrap always sets these two variables
+// regardless of anything Netlify itself chooses to set, so they're a much more reliable signal for
+// "we are inside a deployed serverless function" than `NETLIFY` alone. (better-sqlite3 is a native
+// addon and can't run on Edge Functions at all, so a route that uses the database is guaranteed to
+// be a standard Lambda-backed Function, not an Edge Function, whenever this code path is reached.)
+export const IS_NETLIFY = !!(
+  process.env.NETLIFY ||
+  process.env.LAMBDA_TASK_ROOT ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME
+);
 
 // `next build` runs every route/page module at least once while it decides whether each one CAN
 // be statically prerendered. On Netlify, `process.env.NETLIFY` is set during that build step too
@@ -33,6 +48,13 @@ export const IS_NETLIFY = !!process.env.NETLIFY;
 // at build time at all — this is a second, cheaper line of defense in case that ever isn't enough
 // (e.g. a future route forgets the export, or a Next.js version changes this behavior).
 const IS_BUILD_PHASE = process.env.NEXT_PHASE === PHASE_PRODUCTION_BUILD;
+
+// Logged once per cold start (this file's top level only runs once per container) so the runtime
+// function logs make it obvious whether the environment was detected correctly — this is exactly
+// what was missing when diagnosing the SQLITE_CANTOPEN crash this guard exists to prevent.
+if (!IS_BUILD_PHASE) {
+  console.log(`[blob-store] IS_NETLIFY=${IS_NETLIFY} (NETLIFY=${process.env.NETLIFY}, LAMBDA_TASK_ROOT=${!!process.env.LAMBDA_TASK_ROOT}, AWS_LAMBDA_FUNCTION_NAME=${!!process.env.AWS_LAMBDA_FUNCTION_NAME})`);
+}
 
 async function getBlobStore() {
   const { getStore } = await import("@netlify/blobs");
