@@ -66,28 +66,45 @@ async function getBlobStore() {
   return getStore({ name: STORE_NAME, consistency: "strong" });
 }
 
-/** Downloads the last-persisted DB into `dbFilePath`, or creates a brand-new database there (and
- * immediately persists it) if no blob has ever been saved yet — e.g. the very first request after
- * the first deploy. */
+/** Downloads the last-persisted DB into `dbFilePath`. If no blob is found — either because none
+ * has ever been saved (the very first request after the first deploy) or, empirically, because
+ * Netlify Blobs occasionally doesn't yet reflect a write that happened only seconds earlier even
+ * with `consistency: "strong"` — this bootstraps a fresh database into `dbFilePath` so the current
+ * request can proceed, but deliberately does NOT save that fresh copy back to Blobs (see the
+ * comment above `persistDbToBlob` below for why that matters). */
 export async function loadDbFromBlob(dbFilePath: string): Promise<void> {
   if (!IS_NETLIFY || IS_BUILD_PHASE) return;
-  try {
-    const store = await getBlobStore();
-    const existing = await store.get(BLOB_KEY, { type: "arrayBuffer" });
-    if (existing) {
-      console.log(`[blob-store] Found existing blob (${existing.byteLength} bytes) — loading it.`);
-      fs.writeFileSync(dbFilePath, Buffer.from(existing));
-      return;
+
+  // Retry a couple of times before concluding "no blob exists" — this is specifically to ride out
+  // the read-after-write delay observed in production: a request would save a completed Setup
+  // Wizard successfully, and a request on another container *45 seconds later* would still get an
+  // empty read back from `store.get()`, wrongly concluding no database had ever been saved.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const store = await getBlobStore();
+      const existing = await store.get(BLOB_KEY, { type: "arrayBuffer" });
+      if (existing) {
+        console.log(`[blob-store] Found existing blob (${existing.byteLength} bytes) on attempt ${attempt} — loading it.`);
+        fs.writeFileSync(dbFilePath, Buffer.from(existing));
+        return;
+      }
+      console.log(`[blob-store] store.get() returned nothing on attempt ${attempt}/3.`);
+    } catch (err) {
+      console.error(`[blob-store] Failed to read existing blob on attempt ${attempt}/3:`, err);
     }
-    console.log("[blob-store] store.get() returned nothing (no existing blob found) — bootstrapping a fresh database.");
-  } catch (err) {
-    console.error("[blob-store] Failed to read existing blob, starting a fresh database:", err);
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 300));
   }
 
-  // No blob yet (or reading it failed) — bootstrap a fresh database and save it right away so the
-  // next cold start (and this one, after this request) has something real to load.
+  // Still nothing after retrying — bootstrap a fresh database so this request can proceed at all,
+  // but do NOT persist it back to Blobs here. Auto-saving on "not found" used to be the behavior,
+  // and it was actively destructive: when the "not found" was actually just a stale/delayed read
+  // (not a real absence of data), that auto-save would overwrite the real, already-saved database
+  // with an empty one — this is exactly what caused the Setup Wizard to "lose" a save that had
+  // already succeeded. Now, a fresh bootstrap only becomes durable once the user actually does
+  // something (finishing the Setup Wizard, or any other action that goes through `persistDb()`),
+  // at which point it's a deliberate save, not a guess.
+  console.log("[blob-store] Giving up after 3 attempts — bootstrapping a fresh LOCAL database for this request only (not persisting it to Blobs).");
   initializeFreshDatabase(dbFilePath);
-  await persistDbToBlob(dbFilePath);
 }
 
 /** Uploads the current bytes of `dbFilePath` to the blob store. Call this after any write. */
