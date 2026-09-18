@@ -15,6 +15,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!session) redirect("/login");
 
   const settings = getSettings();
+  console.log(`[layout-setup-check] setup_completed=${settings?.setup_completed} business_name=${settings?.business_name} settings_updated_at=${settings?.updated_at}`);
   if (!settings?.setup_completed) redirect("/setup");
 
   return (
