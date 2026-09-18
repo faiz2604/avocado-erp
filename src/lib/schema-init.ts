@@ -9,9 +9,13 @@ import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import { DEFAULT_EXPENSE_CATEGORIES } from "./constants";
 
-export function initializeFreshDatabase(dbFilePath: string): void {
+/** `journalMode` matters on Netlify: the journal mode is stored inside the database file itself,
+ * and a file created in WAL mode keeps writing commits to a separate `-wal` sidecar that never
+ * gets uploaded with it. Callers that ship the file elsewhere (src/lib/blob-store.ts) pass
+ * "DELETE" so the database stays self-contained — see the long comment in src/lib/db.ts. */
+export function initializeFreshDatabase(dbFilePath: string, journalMode: "WAL" | "DELETE" = "WAL"): void {
   const db = new Database(dbFilePath);
-  db.pragma("journal_mode = WAL");
+  db.pragma(`journal_mode = ${journalMode}`);
   db.pragma("foreign_keys = ON");
 
   const schemaPath = path.resolve(process.cwd(), "src/db/schema.sql");

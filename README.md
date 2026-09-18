@@ -149,6 +149,23 @@ since every one of them reads live, per-request session/database state. `src/lib
 also has a second, independent guard (`NEXT_PHASE === "phase-production-build"`) that makes Blobs
 calls a safe no-op if they're ever somehow reached during a build regardless.
 
+**Why the database runs in `journal_mode = DELETE` on Netlify (and WAL locally):** this one is not
+cosmetic — getting it wrong silently destroys every write. SQLite's WAL mode puts committed
+transactions in a `dev.db-wal` sidecar file and only folds them into the main `dev.db` file at a
+checkpoint (normally when the connection closes; this app's connection is deliberately long-lived,
+so that never happens). Since only `dev.db` itself is uploaded to Blobs, every write stayed behind
+in the sidecar: the blob sat frozen at whatever `initializeFreshDatabase()` had written, at a
+constant 307,200 bytes, no matter how many times data was saved — while the single container that
+*made* the write kept reading its own WAL and so looked perfectly healthy. The visible symptom was
+the Setup Wizard reappearing forever, with some requests reporting `setup_completed=1` and others
+the original bootstrap values, depending on which container served them. `DELETE` mode keeps every
+commit inside the single file that actually gets uploaded. For the same reason,
+`src/lib/blob-store.ts` deletes any `-wal`/`-shm`/`-journal` sidecars before writing a downloaded
+database into `/tmp` (a stale sidecar would otherwise be applied on top of the fresh file), and
+`persistDb()` runs a `wal_checkpoint(TRUNCATE)` as a safety net for database files created by
+older builds. WAL is kept for local development, where the file lives on a real disk and is never
+shipped anywhere.
+
 **Known limitation, by design:** this is a pragmatic fit for a single-operator or small-team
 business, not a substitute for a real transactional database under heavy concurrent load. Because
 each write downloads-then-reuploads the whole database file, two writes landing at truly the same

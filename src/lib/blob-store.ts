@@ -66,6 +66,25 @@ async function getBlobStore() {
   return getStore({ name: STORE_NAME, consistency: "strong" });
 }
 
+/** Deletes the database file and any SQLite sidecar files left next to it in /tmp.
+ *
+ * Both callers below need this. Writing a freshly-downloaded database over an old one while a
+ * stale `-wal`/`-shm` sidecar is still lying around lets SQLite apply the *old* container's
+ * journal on top of the *new* file, and `initializeFreshDatabase()` is deliberately idempotent
+ * (it only inserts defaults when they're missing), so pointing it at a leftover file produces a
+ * database that is anything but fresh — in production that surfaced as a container serving
+ * settings from ~100 minutes earlier. /tmp survives between invocations on a warm container, so
+ * neither situation is hypothetical. */
+function clearDbFiles(dbFilePath: string): void {
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    try {
+      fs.rmSync(`${dbFilePath}${suffix}`, { force: true });
+    } catch {
+      // Best effort — a missing file is the normal case.
+    }
+  }
+}
+
 /** Downloads the last-persisted DB into `dbFilePath`. If no blob is found — either because none
  * has ever been saved (the very first request after the first deploy) or, empirically, because
  * Netlify Blobs occasionally doesn't yet reflect a write that happened only seconds earlier even
@@ -85,6 +104,7 @@ export async function loadDbFromBlob(dbFilePath: string): Promise<void> {
       const existing = await store.get(BLOB_KEY, { type: "arrayBuffer" });
       if (existing) {
         console.log(`[blob-store] Found existing blob (${existing.byteLength} bytes) on attempt ${attempt} — loading it.`);
+        clearDbFiles(dbFilePath);
         fs.writeFileSync(dbFilePath, Buffer.from(existing));
         return;
       }
@@ -104,7 +124,8 @@ export async function loadDbFromBlob(dbFilePath: string): Promise<void> {
   // something (finishing the Setup Wizard, or any other action that goes through `persistDb()`),
   // at which point it's a deliberate save, not a guess.
   console.log("[blob-store] Giving up after 3 attempts — bootstrapping a fresh LOCAL database for this request only (not persisting it to Blobs).");
-  initializeFreshDatabase(dbFilePath);
+  clearDbFiles(dbFilePath);
+  initializeFreshDatabase(dbFilePath, "DELETE");
 }
 
 /** Uploads the current bytes of `dbFilePath` to the blob store. Call this after any write. */

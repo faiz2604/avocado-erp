@@ -10,7 +10,25 @@ export const DB_PATH = IS_NETLIFY
 
 function openConnection(): Database.Database {
   const conn = new Database(DB_PATH);
-  conn.pragma("journal_mode = WAL");
+  // On Netlify the entire database travels as a single file (downloaded from Blobs into /tmp
+  // before use, uploaded back after every write), so it MUST be self-contained. WAL mode breaks
+  // that assumption badly: a committed transaction is written to the `<db>-wal` SIDECAR file and
+  // only folded into the main .db file at a checkpoint (normally when the connection closes — and
+  // this connection is deliberately long-lived, so that never happens). The main .db file we
+  // upload therefore contained NONE of the app's writes.
+  //
+  // That was the real cause of "the Setup Wizard keeps coming back": the blob stayed frozen at
+  // whatever `initializeFreshDatabase()` wrote when it closed its own connection (a constant
+  // 307200 bytes in production, never changing no matter how many times setup was completed),
+  // while the one container that performed the write kept reading its own WAL and so looked
+  // perfectly fine — which is exactly why some requests reported setup_completed=1 and others
+  // reported the original bootstrap values.
+  //
+  // DELETE mode keeps every commit inside the single .db file, so what gets uploaded is what was
+  // actually written. WAL's benefit (concurrent readers during a write) is irrelevant here: each
+  // serverless container is a single process working on its own private copy in /tmp. Locally,
+  // where the file lives on a real disk and is never shipped anywhere, WAL is kept.
+  conn.pragma(IS_NETLIFY ? "journal_mode = DELETE" : "journal_mode = WAL");
   conn.pragma("foreign_keys = ON");
   return conn;
 }
@@ -82,6 +100,16 @@ export async function getDb(): Promise<Database.Database> {
  * (e.g. src/app/api/setup/route.ts).
  */
 export async function persistDb(): Promise<void> {
+  // Safety net for any container whose database file is still in WAL mode — e.g. one that
+  // downloaded a blob created by an older build, since journal mode is a property stored inside
+  // the database file itself. This forces anything sitting in the `-wal` sidecar into the main
+  // file before we upload that file's bytes. In DELETE mode (see openConnection) there is no WAL
+  // and this is a harmless no-op.
+  try {
+    _db?.pragma("wal_checkpoint(TRUNCATE)");
+  } catch {
+    // Nothing to checkpoint — fine.
+  }
   await persistDbToBlob(DB_PATH);
 }
 
