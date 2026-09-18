@@ -54,6 +54,11 @@ const IS_BUILD_PHASE = process.env.NEXT_PHASE === PHASE_PRODUCTION_BUILD;
 // what was missing when diagnosing the SQLITE_CANTOPEN crash this guard exists to prevent.
 if (!IS_BUILD_PHASE) {
   console.log(`[blob-store] IS_NETLIFY=${IS_NETLIFY} (NETLIFY=${process.env.NETLIFY}, LAMBDA_TASK_ROOT=${!!process.env.LAMBDA_TASK_ROOT}, AWS_LAMBDA_FUNCTION_NAME=${!!process.env.AWS_LAMBDA_FUNCTION_NAME})`);
+  // Netlify auto-configures @netlify/blobs inside a deployed function via this env var (a
+  // base64-encoded JSON blob containing the site ID / token / API URL it needs to talk to the
+  // Blobs API). If it's missing, @netlify/blobs can't authenticate at all — this is the next
+  // thing to check if reads/writes below keep silently "not finding" previously-saved data.
+  console.log(`[blob-store] NETLIFY_BLOBS_CONTEXT present=${!!process.env.NETLIFY_BLOBS_CONTEXT}, SITE_ID=${process.env.SITE_ID ?? "(unset)"}`);
 }
 
 async function getBlobStore() {
@@ -70,9 +75,11 @@ export async function loadDbFromBlob(dbFilePath: string): Promise<void> {
     const store = await getBlobStore();
     const existing = await store.get(BLOB_KEY, { type: "arrayBuffer" });
     if (existing) {
+      console.log(`[blob-store] Found existing blob (${existing.byteLength} bytes) — loading it.`);
       fs.writeFileSync(dbFilePath, Buffer.from(existing));
       return;
     }
+    console.log("[blob-store] store.get() returned nothing (no existing blob found) — bootstrapping a fresh database.");
   } catch (err) {
     console.error("[blob-store] Failed to read existing blob, starting a fresh database:", err);
   }
@@ -90,6 +97,7 @@ export async function persistDbToBlob(dbFilePath: string): Promise<void> {
     const bytes = fs.readFileSync(dbFilePath);
     const store = await getBlobStore();
     await store.set(BLOB_KEY, bytes);
+    console.log(`[blob-store] Persisted ${bytes.byteLength} bytes to blob store successfully.`);
   } catch (err) {
     // Don't let a failed backup fail the user's request — the write already succeeded against the
     // local /tmp copy for this container. Surface loudly in logs so it's not silently lost.
